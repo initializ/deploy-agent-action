@@ -1,0 +1,154 @@
+name: Build governed agent image
+description: >
+  Build a claude-agent or strands agent's own image, then wrap it with the
+  initializ governance layer and push the governed image. The governance
+  Dockerfile is generated inline (the SDK does not ship one) — pin the pkg image
+  to pin the SDK version.
+
+inputs:
+  framework:
+    description: "claude-agent | strands"
+    required: true
+  image:
+    description: "Target image repo, e.g. ghcr.io/initializ-agents/denyabot"
+    required: true
+  tag:
+    description: "Governed image tag (e.g. the commit SHA)"
+    required: true
+  context:
+    description: "Docker build context"
+    default: "."
+  app-dockerfile:
+    description: "The agent's OWN, unchanged Dockerfile"
+    default: "Dockerfile"
+  pkg-image:
+    description: >
+      Governance pkg image. Defaults per framework:
+      claude-agent -> ghcr.io/initializ/claude-agent-pkg, strands ->
+      ghcr.io/initializ/strands-pkg. Pin an immutable :vX.Y.Z (a mutable tag is
+      cached by buildx and can silently ship a stale SDK).
+    default: ""
+  strands-extra:
+    description: "strands only: provider SDK the model gateway needs — anthropic (Messages API) | openai (Responses API)"
+    default: "anthropic"
+  governed-cmd:
+    description: >
+      Optional CMD for the governed image, as a JSON array string
+      (e.g. '["node","dist/worker/index.js"]'). Set it only when the agent base
+      declares no CMD; otherwise the base's CMD is inherited.
+    default: ""
+  platform:
+    description: "Target platform (match the cluster)"
+    default: "linux/amd64"
+  registry:
+    description: "Registry to log in to (skip login by leaving password empty)"
+    default: "ghcr.io"
+  username:
+    description: "Registry username (optional; needs write:packages + read:packages)"
+    default: ""
+  password:
+    description: "Registry token/password (optional; if set, the action logs in)"
+    default: ""
+
+outputs:
+  ref:
+    description: "The pushed governed image ref"
+    value: ${{ steps.build.outputs.ref }}
+  base-ref:
+    description: "The pushed ungoverned base image ref"
+    value: ${{ steps.build.outputs.base }}
+
+runs:
+  using: composite
+  steps:
+    - id: build
+      shell: bash
+      env:
+        FRAMEWORK: ${{ inputs.framework }}
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+        CONTEXT: ${{ inputs.context }}
+        APP_DOCKERFILE: ${{ inputs.app-dockerfile }}
+        PKG_IMAGE_IN: ${{ inputs.pkg-image }}
+        STRANDS_EXTRA: ${{ inputs.strands-extra }}
+        GOVERNED_CMD: ${{ inputs.governed-cmd }}
+        PLATFORM: ${{ inputs.platform }}
+        REGISTRY: ${{ inputs.registry }}
+        REG_USER: ${{ inputs.username }}
+        REG_PASS: ${{ inputs.password }}
+      run: |
+        set -euo pipefail
+
+        case "$FRAMEWORK" in
+          claude-agent|strands) ;;
+          *) echo "::error::framework must be claude-agent or strands (got '$FRAMEWORK'); forge agents build via 'forge build' and skip this action"; exit 2 ;;
+        esac
+
+        if [ -n "$REG_PASS" ]; then
+          echo "--- docker login $REGISTRY"
+          echo "$REG_PASS" | docker login "$REGISTRY" -u "${REG_USER:-$GITHUB_ACTOR}" --password-stdin
+        fi
+
+        REF="${IMAGE}:${TAG}"
+        BASE="${IMAGE}:base-${TAG}"
+
+        # 1) Build the agent's OWN image and PUSH it. The governed build below does
+        #    `FROM ${AGENT_IMAGE}`, and the container/remote buildx driver most CI
+        #    runners use resolves FROM from the registry (it can't see a
+        #    locally-built image), so the base must be pushed first.
+        echo "--- 1) build app image -> $BASE"
+        docker build --platform "$PLATFORM" -f "$APP_DOCKERFILE" -t "$BASE" --push "$CONTEXT"
+
+        # 2) Generate the governance Dockerfile for this framework. Built with echo
+        #    lines (not a YAML heredoc) so no stray indentation leaks in; the
+        #    ${...} refs stay LITERAL for docker to expand from ARGs at build time.
+        GOV="$RUNNER_TEMP/governance.Dockerfile"
+        if [ "$FRAMEWORK" = "claude-agent" ]; then
+          PKG="${PKG_IMAGE_IN:-ghcr.io/initializ/claude-agent-pkg:v0.0.3}"
+          {
+            echo 'ARG AGENT_IMAGE'
+            echo 'ARG PKG_IMAGE'
+            echo 'FROM ${PKG_IMAGE} AS gov'
+            echo 'FROM ${AGENT_IMAGE}'
+            echo 'COPY --from=gov /opt/initializ /opt/initializ'
+            echo 'ENV NODE_OPTIONS="--import /opt/initializ/dist/register.js"'
+            echo '# runAsNonRoot needs a NUMERIC uid (node = 1000) it can verify without /etc/passwd'
+            echo 'USER 1000'
+          } > "$GOV"
+          [ -n "$GOVERNED_CMD" ] && echo "CMD $GOVERNED_CMD" >> "$GOV"
+          BUILD_ARGS=(--build-arg "PKG_IMAGE=$PKG")
+        else
+          PKG="${PKG_IMAGE_IN:-ghcr.io/initializ/strands-pkg:v0.0.2}"
+          {
+            echo '# syntax=docker/dockerfile:1'
+            echo 'ARG STRANDS_PKG_IMAGE'
+            echo 'ARG AGENT_IMAGE'
+            echo 'ARG INITIALIZ_STRANDS_EXTRA=anthropic'
+            echo 'FROM ${STRANDS_PKG_IMAGE} AS strandspkg'
+            echo 'FROM ${AGENT_IMAGE}'
+            echo 'ARG INITIALIZ_STRANDS_EXTRA'
+            echo '# Install the prebuilt wheel into the same site-packages the app uses; its'
+            echo '# shipped .pth auto-activates governance (audit + PDP + model-gateway egress)'
+            echo '# on every interpreter start, regardless of the app CMD.'
+            echo 'COPY --from=strandspkg /wheels /tmp/initializ-wheels'
+            echo 'RUN pip install --no-cache-dir "$(ls /tmp/initializ-wheels/initializ_strands-*.whl)[${INITIALIZ_STRANDS_EXTRA}]" \'
+            echo ' && rm -rf /tmp/initializ-wheels'
+            echo 'ENV HOME=/home/app'
+            echo 'RUN mkdir -p /home/app && chown -R 1000:1000 /home/app || true'
+            echo 'USER 1000'
+          } > "$GOV"
+          [ -n "$GOVERNED_CMD" ] && echo "CMD $GOVERNED_CMD" >> "$GOV"
+          BUILD_ARGS=(--build-arg "STRANDS_PKG_IMAGE=$PKG" --build-arg "INITIALIZ_STRANDS_EXTRA=$STRANDS_EXTRA")
+        fi
+
+        echo "--- generated governance Dockerfile"
+        cat "$GOV"
+
+        # 3) Build the governed image FROM the pushed base, and PUSH it.
+        echo "--- 3) wrap -> $REF"
+        docker build --platform "$PLATFORM" \
+          --build-arg "AGENT_IMAGE=$BASE" "${BUILD_ARGS[@]}" \
+          -f "$GOV" -t "$REF" --push "$CONTEXT"
+
+        echo "ref=$REF"   >> "$GITHUB_OUTPUT"
+        echo "base=$BASE" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,39 @@
+# Example: build + deploy a FORGE agent.
+# Forge agents have NO governance wrap step — `forge build` produces the image
+# and the .forge-output the CLI reads; the deploy action composes the request
+# from forge.yaml + initializ-deploy.yaml. So: build with forge, then deploy.
+name: deploy-forge-agent
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build + push the forge image however your forge toolchain does it, e.g.:
+      #   forge build --push --image ghcr.io/${{ github.repository }}:${{ github.sha }}
+      # then pass that ref to the deploy action below.
+      - id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          REF="ghcr.io/${{ github.repository }}:${{ github.sha }}"
+          forge build --push --image "$REF"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - uses: initializ/deploy-agent-action/deploy@v1
+        with:
+          image: ${{ steps.build.outputs.ref }}
+          spec-file: initializ-deploy.yaml         # type: forge (or omit; forge.yaml carries it)
+          token: ${{ secrets.INITIALIZ_TOKEN }}
+          org-id: ${{ secrets.INITIALIZ_ORG_ID }}
+          workspace-id: ${{ secrets.INITIALIZ_WORKSPACE_ID }}
+          api-url: ${{ vars.INITIALIZ_API_URL }}
+          auth-url: ${{ vars.INITIALIZ_AUTH_URL }}

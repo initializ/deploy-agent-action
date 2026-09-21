@@ -1,0 +1,39 @@
+# Example: build + govern + deploy a STRANDS agent (e.g. DenyABot).
+# Drop this in the agent repo as .github/workflows/deploy.yml.
+name: deploy-strands-agent
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) build app image (repo's own Dockerfile) -> wrap with strands governance -> push governed
+      - id: gov
+        uses: initializ/deploy-agent-action/build-governed-image@v1
+        with:
+          framework: strands
+          image: ghcr.io/${{ github.repository }}
+          tag: ${{ github.sha }}
+          strands-extra: anthropic            # openai for a Responses-API gateway
+          pkg-image: ghcr.io/initializ/strands-pkg:v0.0.2
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # write:packages + read:packages
+
+      # 2) deploy the governed image (type: strands lives in initializ-deploy.yaml)
+      - uses: initializ/deploy-agent-action/deploy@v1
+        with:
+          image: ${{ steps.gov.outputs.ref }}
+          spec-file: initializ-deploy.yaml
+          token: ${{ secrets.INITIALIZ_TOKEN }}
+          org-id: ${{ secrets.INITIALIZ_ORG_ID }}
+          workspace-id: ${{ secrets.INITIALIZ_WORKSPACE_ID }}
+          api-url: ${{ vars.INITIALIZ_API_URL }}     # e.g. https://agent-builder.test.initializ.ai
+          auth-url: ${{ vars.INITIALIZ_AUTH_URL }}   # e.g. https://api-next.test.initializ.ai
+          wait: "true"

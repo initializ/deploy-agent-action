@@ -1,0 +1,36 @@
+# Example: build + govern + deploy a CLAUDE-AGENT (e.g. code-reviewer).
+name: deploy-claude-agent
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: gov
+        uses: initializ/deploy-agent-action/build-governed-image@v1
+        with:
+          framework: claude-agent
+          image: ghcr.io/${{ github.repository }}
+          tag: ${{ github.sha }}
+          pkg-image: ghcr.io/initializ/claude-agent-pkg:v0.0.3
+          # The node base often sets no CMD — give the governed image its entrypoint.
+          governed-cmd: '["node","dist/worker/index.js"]'
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: initializ/deploy-agent-action/deploy@v1
+        with:
+          image: ${{ steps.gov.outputs.ref }}
+          spec-file: initializ-deploy.yaml         # type: claude-agent
+          token: ${{ secrets.INITIALIZ_TOKEN }}
+          org-id: ${{ secrets.INITIALIZ_ORG_ID }}
+          workspace-id: ${{ secrets.INITIALIZ_WORKSPACE_ID }}
+          api-url: ${{ vars.INITIALIZ_API_URL }}
+          auth-url: ${{ vars.INITIALIZ_AUTH_URL }}
