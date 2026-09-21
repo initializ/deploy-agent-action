@@ -25,9 +25,9 @@ To deploy to the initializ platform you need:
    `agent.workspace` is set in the spec.
 4. **A container registry you can push to** (GHCR or ECR — see below) that the
    platform's cluster can pull from.
-5. **`claude-agent` / `strands` only:** read access to the governance pkg image
-   (`ghcr.io/initializ/claude-agent-pkg` / `strands-pkg`) so `build-governed-image`
-   can wrap your image. Pin its `:vX.Y.Z` to pin the SDK.
+5. **`claude-agent` / `strands` only:** nothing extra — the governance pkg images
+   (`ghcr.io/initializ/claude-agent-pkg` / `strands-pkg`) are **public**, so
+   `build-governed-image` pulls them anonymously. Pin its `:vX.Y.Z` to pin the SDK.
 6. An `initializ-deploy.yaml` in the agent repo (and `forge.yaml` for forge agents).
 
 ## Where the image is pushed (registry)
@@ -39,7 +39,7 @@ earlier step. So the same action targets any registry — see the examples:
 | Registry | How you authenticate | `image` looks like | Example |
 | --- | --- | --- | --- |
 | **GitHub (GHCR)** | `GITHUB_TOKEN` with `packages: write` (the action logs in) | `ghcr.io/<org>/<repo>` | [`examples/strands.yml`](examples/strands.yml) |
-| **AWS ECR** | `aws-actions/configure-aws-credentials` + `amazon-ecr-login` **before** the action (leave `password` empty) | `<acct>.dkr.ecr.<region>.amazonaws.com/<repo>` | [`examples/ecr.yml`](examples/ecr.yml) |
+| **AWS ECR** | `aws-actions/configure-aws-credentials` + `amazon-ecr-login` **before** the action (leave `password` empty). No GHCR login needed — the governance pkg is public. | `<acct>.dkr.ecr.<region>.amazonaws.com/<repo>` | [`examples/ecr.yml`](examples/ecr.yml) |
 
 > ECR does not auto-create repositories — create the ECR repo once (console / Terraform /
 > `aws ecr create-repository`) before the first push.

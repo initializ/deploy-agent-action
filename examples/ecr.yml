@@ -2,11 +2,9 @@
 # own AWS ECR (instead of GHCR). Shown for strands; for claude-agent swap
 # framework: claude-agent and add governed-cmd if the base sets no CMD.
 #
-# Note the TWO logins the governed build needs:
-#   1) GHCR read  — to PULL the governance pkg image (ghcr.io/initializ/strands-pkg).
-#      Use a token initializ granted you with read:packages, or skip if the pkg
-#      images are public.
-#   2) ECR        — to PUSH the base + governed image to your ECR repo.
+# You only need to log in to ECR (to PUSH). The governance pkg images
+# (ghcr.io/initializ/{claude-agent,strands}-pkg) are PUBLIC, so the governed
+# build pulls them anonymously — no GHCR login required.
 name: deploy-strands-agent-ecr
 on:
   push:
@@ -31,20 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1) GHCR read — so the governed build can PULL the strands-pkg governance image.
-      #    Skip this step if initializ has made the pkg images public.
-      - name: ghcr login (pull governance pkg)
-        run: echo "${{ secrets.INITIALIZ_PKG_TOKEN }}" | docker login ghcr.io -u "${{ vars.INITIALIZ_PKG_USER }}" --password-stdin
-
-      # 2) ECR login — so the build can PUSH the base + governed image.
+      # ECR login — so the build can PUSH the base + governed image.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}   # or use aws-access-key-id/secret
           aws-region: ${{ env.AWS_REGION }}
       - uses: aws-actions/amazon-ecr-login@v2
 
-      # 3) build app image -> wrap with governance -> push to ECR.
-      #    password is empty: both registries are already logged in above.
+      # build app image -> wrap with governance (pulls the PUBLIC pkg anonymously)
+      # -> push to ECR. password is empty: ECR is already logged in above.
       - id: gov
         uses: initializ/deploy-agent-action/build-governed-image@v1
         with:
