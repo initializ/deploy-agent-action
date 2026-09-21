@@ -40,6 +40,16 @@ inputs:
   platform:
     description: "Target platform (match the cluster)"
     default: "linux/amd64"
+  app-build-args:
+    description: "Newline-separated KEY=VALUE build-args for the app image build (each → --build-arg)"
+    default: ""
+  app-build-contexts:
+    description: >
+      Newline-separated name=value additional build contexts for the app build
+      (each → --build-context). Use to redirect a private base FROM to a
+      pullable one on the runner, e.g.
+      myacct.dkr.ecr.us-east-1.amazonaws.com/library/python:3.12-slim=docker-image://docker.io/library/python:3.12-slim
+    default: ""
   registry:
     description: "Registry to log in to (skip login by leaving password empty)"
     default: "ghcr.io"
@@ -73,6 +83,8 @@ runs:
         STRANDS_EXTRA: ${{ inputs.strands-extra }}
         GOVERNED_CMD: ${{ inputs.governed-cmd }}
         PLATFORM: ${{ inputs.platform }}
+        APP_BUILD_ARGS: ${{ inputs.app-build-args }}
+        APP_BUILD_CONTEXTS: ${{ inputs.app-build-contexts }}
         REGISTRY: ${{ inputs.registry }}
         REG_USER: ${{ inputs.username }}
         REG_PASS: ${{ inputs.password }}
@@ -97,7 +109,10 @@ runs:
         #    runners use resolves FROM from the registry (it can't see a
         #    locally-built image), so the base must be pushed first.
         echo "--- 1) build app image -> $BASE"
-        docker build --platform "$PLATFORM" -f "$APP_DOCKERFILE" -t "$BASE" --push "$CONTEXT"
+        APP_ARGS=()
+        while IFS= read -r a; do [ -n "$a" ] && APP_ARGS+=(--build-arg "$a"); done <<< "$APP_BUILD_ARGS"
+        while IFS= read -r c; do [ -n "$c" ] && APP_ARGS+=(--build-context "$c"); done <<< "$APP_BUILD_CONTEXTS"
+        docker build --platform "$PLATFORM" -f "$APP_DOCKERFILE" "${APP_ARGS[@]}" -t "$BASE" --push "$CONTEXT"
 
         # 2) Generate the governance Dockerfile for this framework. Built with echo
         #    lines (not a YAML heredoc) so no stray indentation leaks in; the
