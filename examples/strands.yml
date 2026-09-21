@@ -17,8 +17,8 @@ jobs:
       INITIALIZ_TOKEN: ${{ secrets.INITIALIZ_TOKEN }}          # org secret
       INITIALIZ_ORG_ID: ${{ vars.INITIALIZ_ORG_ID }}           # org variable
       INITIALIZ_WORKSPACE_ID: ${{ vars.INITIALIZ_WORKSPACE_ID }}
-      # INITIALIZ_API_URL / INITIALIZ_AUTH_URL default to the test env in the
-      # action — set them here only to target a different environment.
+      INITIALIZ_API_URL: ${{ vars.INITIALIZ_API_URL }}         # your agent-builder ingress
+      INITIALIZ_AUTH_URL: ${{ vars.INITIALIZ_AUTH_URL }}       # your api-next ingress
     steps:
       - uses: actions/checkout@v4
 

@@ -24,11 +24,11 @@ inputs:
     description: "Workspace id. Falls back to $INITIALIZ_WORKSPACE_ID (or agent.workspace in the spec)."
     default: ""
   api-url:
-    description: "agent-builder ingress. Falls back to $INITIALIZ_API_URL, then the baked default."
-    default: ""
+    description: "agent-builder ingress, e.g. https://agent-builder.<env>.initializ.ai. Required (or set $INITIALIZ_API_URL)."
+    required: true
   auth-url:
-    description: "api-next ingress (whoami/verify). Falls back to $INITIALIZ_AUTH_URL, then the baked default."
-    default: ""
+    description: "api-next ingress (whoami/verify), e.g. https://api-next.<env>.initializ.ai. Required (or set $INITIALIZ_AUTH_URL)."
+    required: true
   cli-version:
     description: "initializ CLI release tag, or 'latest'"
     default: "latest"
@@ -70,15 +70,19 @@ runs:
       run: |
         set -euo pipefail
 
-        # Resolve config: explicit input > ambient env > baked default (URLs only).
+        # Resolve config: explicit input > ambient INITIALIZ_* env. No baked URL
+        # defaults — a public action must never point a customer at someone
+        # else's platform; the environment is always the caller's to name.
         TOKEN="${INPUT_TOKEN:-${INITIALIZ_TOKEN:-}}"
         ORG="${INPUT_ORG:-${INITIALIZ_ORG_ID:-}}"
         WS="${INPUT_WS:-${INITIALIZ_WORKSPACE_ID:-}}"
-        API_URL="${INPUT_API_URL:-${INITIALIZ_API_URL:-https://agent-builder.test.initializ.ai}}"
-        AUTH_URL="${INPUT_AUTH_URL:-${INITIALIZ_AUTH_URL:-https://api-next.test.initializ.ai}}"
+        API_URL="${INPUT_API_URL:-${INITIALIZ_API_URL:-}}"
+        AUTH_URL="${INPUT_AUTH_URL:-${INITIALIZ_AUTH_URL:-}}"
 
-        [ -n "$TOKEN" ] || { echo "::error::no platform token — pass 'token' or set the INITIALIZ_TOKEN org secret into the job env"; exit 2; }
-        [ -n "$ORG" ]   || { echo "::error::no org id — pass 'org-id' or set INITIALIZ_ORG_ID"; exit 2; }
+        [ -n "$TOKEN" ]    || { echo "::error::no platform token — pass 'token' or set the INITIALIZ_TOKEN secret into the job env"; exit 2; }
+        [ -n "$ORG" ]      || { echo "::error::no org id — pass 'org-id' or set INITIALIZ_ORG_ID"; exit 2; }
+        [ -n "$API_URL" ]  || { echo "::error::no api-url — pass 'api-url' or set INITIALIZ_API_URL (your agent-builder ingress)"; exit 2; }
+        [ -n "$AUTH_URL" ] || { echo "::error::no auth-url — pass 'auth-url' or set INITIALIZ_AUTH_URL (your api-next ingress)"; exit 2; }
 
         # Export the resolved values for the CLI (it reads INITIALIZ_*).
         export INITIALIZ_TOKEN="$TOKEN" INITIALIZ_ORG_ID="$ORG" \

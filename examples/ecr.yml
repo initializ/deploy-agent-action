@@ -1,0 +1,61 @@
+# Example: build + govern + deploy an agent, pushing the image to the customer's
+# own AWS ECR (instead of GHCR). Shown for strands; for claude-agent swap
+# framework: claude-agent and add governed-cmd if the base sets no CMD.
+#
+# Note the TWO logins the governed build needs:
+#   1) GHCR read  — to PULL the governance pkg image (ghcr.io/initializ/strands-pkg).
+#      Use a token initializ granted you with read:packages, or skip if the pkg
+#      images are public.
+#   2) ECR        — to PUSH the base + governed image to your ECR repo.
+name: deploy-strands-agent-ecr
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPO: 123456789012.dkr.ecr.us-east-1.amazonaws.com/denyabot   # create this repo first
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write            # for OIDC AWS auth (or use static AWS keys)
+    env:
+      INITIALIZ_TOKEN: ${{ secrets.INITIALIZ_TOKEN }}
+      INITIALIZ_ORG_ID: ${{ vars.INITIALIZ_ORG_ID }}
+      INITIALIZ_WORKSPACE_ID: ${{ vars.INITIALIZ_WORKSPACE_ID }}
+      INITIALIZ_API_URL: ${{ vars.INITIALIZ_API_URL }}
+      INITIALIZ_AUTH_URL: ${{ vars.INITIALIZ_AUTH_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) GHCR read — so the governed build can PULL the strands-pkg governance image.
+      #    Skip this step if initializ has made the pkg images public.
+      - name: ghcr login (pull governance pkg)
+        run: echo "${{ secrets.INITIALIZ_PKG_TOKEN }}" | docker login ghcr.io -u "${{ vars.INITIALIZ_PKG_USER }}" --password-stdin
+
+      # 2) ECR login — so the build can PUSH the base + governed image.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}   # or use aws-access-key-id/secret
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      # 3) build app image -> wrap with governance -> push to ECR.
+      #    password is empty: both registries are already logged in above.
+      - id: gov
+        uses: initializ/deploy-agent-action/build-governed-image@v1
+        with:
+          framework: strands
+          image: ${{ env.ECR_REPO }}
+          tag: ${{ github.sha }}
+          strands-extra: anthropic
+          pkg-image: ghcr.io/initializ/strands-pkg:v0.0.2
+
+      # 4) deploy (token/org/urls from the job env above).
+      - uses: initializ/deploy-agent-action/deploy@v1
+        with:
+          image: ${{ steps.gov.outputs.ref }}
+          wait: "true"
