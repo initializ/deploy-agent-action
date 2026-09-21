@@ -3,6 +3,9 @@ description: >
   Deploy a CI-built forge / claude-agent / strands image to the initializ
   platform via the released `initializ` CLI. The framework is carried by
   `agent.type` in initializ-deploy.yaml — this step is identical for all three.
+  Config resolves as: explicit input > ambient INITIALIZ_* env > baked default.
+  So a caller that exports INITIALIZ_TOKEN/ORG_ID (e.g. from an ORG secret) at the
+  job level needs to pass nothing here.
 
 inputs:
   image:
@@ -12,20 +15,20 @@ inputs:
     description: "Path to initializ-deploy.yaml"
     default: "initializ-deploy.yaml"
   token:
-    description: "INITIALIZ_TOKEN — platform access token (the only real secret)"
-    required: true
+    description: "Platform access token. Falls back to $INITIALIZ_TOKEN (set it once as an ORG secret)."
+    default: ""
   org-id:
-    description: "INITIALIZ_ORG_ID"
-    required: true
+    description: "Org id. Falls back to $INITIALIZ_ORG_ID."
+    default: ""
   workspace-id:
-    description: "INITIALIZ_WORKSPACE_ID (or set agent.workspace in the spec)"
+    description: "Workspace id. Falls back to $INITIALIZ_WORKSPACE_ID (or agent.workspace in the spec)."
     default: ""
   api-url:
-    description: "INITIALIZ_API_URL — agent-builder ingress (serves /api/v1/agents/*)"
-    required: true
+    description: "agent-builder ingress. Falls back to $INITIALIZ_API_URL, then the baked default."
+    default: ""
   auth-url:
-    description: "INITIALIZ_AUTH_URL — api-next ingress (serves /verify for whoami)"
-    required: true
+    description: "api-next ingress (whoami/verify). Falls back to $INITIALIZ_AUTH_URL, then the baked default."
+    default: ""
   cli-version:
     description: "initializ CLI release tag, or 'latest'"
     default: "latest"
@@ -50,11 +53,14 @@ runs:
     - id: deploy
       shell: bash
       env:
-        INITIALIZ_TOKEN: ${{ inputs.token }}
-        INITIALIZ_ORG_ID: ${{ inputs.org-id }}
-        INITIALIZ_WORKSPACE_ID: ${{ inputs.workspace-id }}
-        INITIALIZ_API_URL: ${{ inputs.api-url }}
-        INITIALIZ_AUTH_URL: ${{ inputs.auth-url }}
+        # Inputs come in under INPUT_*; ambient INITIALIZ_* (from the caller's job
+        # env / org secret) is read as the fallback. Kept as separate names so an
+        # empty input never clobbers a set ambient value.
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_ORG: ${{ inputs.org-id }}
+        INPUT_WS: ${{ inputs.workspace-id }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        INPUT_AUTH_URL: ${{ inputs.auth-url }}
         IMAGE: ${{ inputs.image }}
         SPEC_FILE: ${{ inputs.spec-file }}
         CLI_VERSION: ${{ inputs.cli-version }}
@@ -63,6 +69,21 @@ runs:
         TAGS: ${{ inputs.tags }}
       run: |
         set -euo pipefail
+
+        # Resolve config: explicit input > ambient env > baked default (URLs only).
+        TOKEN="${INPUT_TOKEN:-${INITIALIZ_TOKEN:-}}"
+        ORG="${INPUT_ORG:-${INITIALIZ_ORG_ID:-}}"
+        WS="${INPUT_WS:-${INITIALIZ_WORKSPACE_ID:-}}"
+        API_URL="${INPUT_API_URL:-${INITIALIZ_API_URL:-https://agent-builder.test.initializ.ai}}"
+        AUTH_URL="${INPUT_AUTH_URL:-${INITIALIZ_AUTH_URL:-https://api-next.test.initializ.ai}}"
+
+        [ -n "$TOKEN" ] || { echo "::error::no platform token — pass 'token' or set the INITIALIZ_TOKEN org secret into the job env"; exit 2; }
+        [ -n "$ORG" ]   || { echo "::error::no org id — pass 'org-id' or set INITIALIZ_ORG_ID"; exit 2; }
+
+        # Export the resolved values for the CLI (it reads INITIALIZ_*).
+        export INITIALIZ_TOKEN="$TOKEN" INITIALIZ_ORG_ID="$ORG" \
+               INITIALIZ_API_URL="$API_URL" INITIALIZ_AUTH_URL="$AUTH_URL"
+        [ -n "$WS" ] && export INITIALIZ_WORKSPACE_ID="$WS" || true
 
         # Install the released CLI binary (no Go toolchain needed).
         base="https://github.com/initializ/cli/releases"

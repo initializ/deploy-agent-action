@@ -11,6 +11,14 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Surface the platform creds ONCE from org-level secret/vars. The deploy step
+    # then needs no token/org/url inputs (it reads these ambient INITIALIZ_*).
+    env:
+      INITIALIZ_TOKEN: ${{ secrets.INITIALIZ_TOKEN }}          # org secret
+      INITIALIZ_ORG_ID: ${{ vars.INITIALIZ_ORG_ID }}           # org variable
+      INITIALIZ_WORKSPACE_ID: ${{ vars.INITIALIZ_WORKSPACE_ID }}
+      # INITIALIZ_API_URL / INITIALIZ_AUTH_URL default to the test env in the
+      # action — set them here only to target a different environment.
     steps:
       - uses: actions/checkout@v4
 
@@ -26,14 +34,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}   # write:packages + read:packages
 
-      # 2) deploy the governed image (type: strands lives in initializ-deploy.yaml)
+      # 2) deploy the governed image (type: strands lives in initializ-deploy.yaml).
+      # token/org/workspace/urls come from the job env above — nothing to pass here.
       - uses: initializ/deploy-agent-action/deploy@v1
         with:
           image: ${{ steps.gov.outputs.ref }}
-          spec-file: initializ-deploy.yaml
-          token: ${{ secrets.INITIALIZ_TOKEN }}
-          org-id: ${{ secrets.INITIALIZ_ORG_ID }}
-          workspace-id: ${{ secrets.INITIALIZ_WORKSPACE_ID }}
-          api-url: ${{ vars.INITIALIZ_API_URL }}     # e.g. https://agent-builder.test.initializ.ai
-          auth-url: ${{ vars.INITIALIZ_AUTH_URL }}   # e.g. https://api-next.test.initializ.ai
           wait: "true"

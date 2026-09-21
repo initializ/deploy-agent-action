@@ -56,22 +56,39 @@ The **framework is carried by `agent.type` in `initializ-deploy.yaml`** (`forge`
 Outputs: `ref` (governed), `base-ref`.
 
 ### deploy
+Config resolves as **explicit input > ambient `INITIALIZ_*` env > baked default**, so a
+caller that sets `INITIALIZ_*` at the job level (e.g. from an **org secret**) passes only `image`.
+
 | input | default | notes |
 | --- | --- | --- |
 | `image` | — | pushed image ref (required) |
 | `spec-file` | `initializ-deploy.yaml` | carries `agent.type` + tenancy |
-| `token` | — | `INITIALIZ_TOKEN` (required, secret) |
-| `org-id` | — | `INITIALIZ_ORG_ID` (required) |
-| `workspace-id` | — | `INITIALIZ_WORKSPACE_ID` (or `agent.workspace` in the spec) |
-| `api-url` / `auth-url` | — | agent-builder / api-next ingress (required) |
+| `token` | `$INITIALIZ_TOKEN` | platform access token; **falls back to the ambient env** |
+| `org-id` | `$INITIALIZ_ORG_ID` | falls back to the ambient env |
+| `workspace-id` | `$INITIALIZ_WORKSPACE_ID` | or `agent.workspace` in the spec |
+| `api-url` | `https://agent-builder.test.initializ.ai` | **provided by the action**; override or set `$INITIALIZ_API_URL` |
+| `auth-url` | `https://api-next.test.initializ.ai` | **provided by the action**; override or set `$INITIALIZ_AUTH_URL` |
 | `cli-version` | `latest` | CLI release tag |
 | `wait` / `timeout` | `true` / `10m` | poll the rollout |
 | `tags` | — | newline-separated `key=value`, stamped as `agent.initializ.ai/<key>` |
 
-## Secrets / vars to set on the caller repo
-- **Secret** `INITIALIZ_TOKEN` — platform access token (the only real secret).
-- **Secrets/vars** `INITIALIZ_ORG_ID`, `INITIALIZ_WORKSPACE_ID`.
-- **Vars** `INITIALIZ_API_URL`, `INITIALIZ_AUTH_URL`.
+## What the action provides vs. what you supply
+- **The URLs (`api-url`/`auth-url`) are provided by the action** — baked defaults (test env), overridable per call or via `INITIALIZ_API_URL`/`INITIALIZ_AUTH_URL`.
+- **`INITIALIZ_TOKEN` cannot be baked into the action** (a committed secret would be a leaked credential, and a private action's own secrets aren't exposed to callers — GitHub requires the secret to come from the *caller's* workflow). Set it **once as a GitHub organization secret** (visible to your agent repos) and expose it at the job level; then the deploy step needs no token input.
+
+### Minimal setup (set once at the org)
+1. **Org secret** `INITIALIZ_TOKEN` (Settings → Secrets → Actions → New organization secret; scope to the agent repos).
+2. **Org variables** `INITIALIZ_ORG_ID` (and `INITIALIZ_WORKSPACE_ID` unless it's in the spec). URLs only if you're not on the test default.
+3. In the caller workflow, surface them as job env once:
+   ```yaml
+   jobs:
+     deploy:
+       env:
+         INITIALIZ_TOKEN: ${{ secrets.INITIALIZ_TOKEN }}
+         INITIALIZ_ORG_ID: ${{ vars.INITIALIZ_ORG_ID }}
+         INITIALIZ_WORKSPACE_ID: ${{ vars.INITIALIZ_WORKSPACE_ID }}
+   ```
+   Then the deploy step is just `with: { image: ... }`.
 - Registry creds for build/push (`GITHUB_TOKEN` suffices for ghcr with `packages: write`).
 
 ## Caveats
